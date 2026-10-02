@@ -73,8 +73,6 @@ class LonelyMaiPlugin(MaiBotPlugin):
 
         self._bot_qq = await self._get_global_str("bot.qq_account", "")
 
-        await self._init_target_streams()
-
         self._scheduler_task = asyncio.create_task(self._schedule_loop())
         self.ctx.logger.info("LonelyMai 调度器已启动")
 
@@ -88,7 +86,8 @@ class LonelyMaiPlugin(MaiBotPlugin):
         self.ctx.logger.info("LonelyMai 已卸载")
 
     async def on_config_update(self, *args, **kwargs):
-        pass
+        del args, kwargs
+        await self._init_target_streams()
 
     async def _get_global_str(self, key: str, default: str = "") -> str:
         try:
@@ -101,24 +100,37 @@ class LonelyMaiPlugin(MaiBotPlugin):
         return str(val or default)
 
     async def _init_target_streams(self) -> None:
-        self._states.clear()
+        previous = {target_id: state.last_proactive_time for target_id, state in self._states.items()}
+        resolved: Dict[str, ChatStreamState] = {}
+
         for group_qq in self.config.target.allowed_groups:
-            sid = await self._resolve_session_id(group_qq, True)
+            target_id = str(group_qq).strip()
+            if not target_id:
+                continue
+            sid = await self._resolve_session_id(target_id, True)
             if sid:
-                self._states[group_qq] = ChatStreamState(sid, group_qq)
-                self.ctx.logger.info(f"注册群聊: {group_qq}")
+                state = ChatStreamState(sid, target_id)
+                state.last_proactive_time = previous.get(target_id, 0.0)
+                resolved[target_id] = state
             else:
-                self.ctx.logger.warning(f"无法解析群聊: {group_qq}")
+                self.ctx.logger.warning(f"无法解析群聊: {target_id}")
 
         for user_qq in self.config.target.allowed_friends:
-            sid = await self._resolve_session_id(user_qq, False)
+            target_id = str(user_qq).strip()
+            if not target_id:
+                continue
+            sid = await self._resolve_session_id(target_id, False)
             if sid:
-                self._states[user_qq] = ChatStreamState(sid, user_qq)
-                self.ctx.logger.info(f"注册私聊: {user_qq}")
+                state = ChatStreamState(sid, target_id)
+                state.last_proactive_time = previous.get(target_id, 0.0)
+                resolved[target_id] = state
             else:
-                self.ctx.logger.warning(f"无法解析私聊: {user_qq}")
+                self.ctx.logger.warning(f"无法解析私聊: {target_id}")
 
-        self.ctx.logger.info(f"共注册 {len(self._states)} 个目标流")
+        changed = set(resolved) != set(self._states)
+        self._states = resolved
+        if changed or not resolved:
+            self.ctx.logger.info(f"共注册 {len(self._states)} 个目标流")
 
     async def _resolve_session_id(self, qq: str, is_group: bool) -> Optional[str]:
         try:
@@ -131,6 +143,10 @@ class LonelyMaiPlugin(MaiBotPlugin):
             return None
 
         if not isinstance(result, dict):
+            self.ctx.logger.warning(f"会话查询返回了非字典 ({qq}): {type(result).__name__}")
+            return None
+        if result.get("success") is False:
+            self.ctx.logger.warning(f"会话查询失败 ({qq}): {result.get('error') or result}")
             return None
         stream = result.get("stream", result if "session_id" in result else None)
         if not stream:
@@ -141,6 +157,12 @@ class LonelyMaiPlugin(MaiBotPlugin):
 
     # ========== 调度循环 ==========
 
+    def _next_sleep_seconds(self) -> int:
+        base_interval = max(1, self.config.scheduler.check_interval)
+        jitter = self.config.scheduler.jitter
+        actual_minutes = base_interval + random.randint(-jitter, jitter) if jitter > 0 else base_interval
+        return max(60, actual_minutes * 60)
+
     async def _schedule_loop(self) -> None:
         while True:
             try:
@@ -148,13 +170,11 @@ class LonelyMaiPlugin(MaiBotPlugin):
                     await asyncio.sleep(60)
                     continue
 
-                base_interval = max(1, self.config.scheduler.check_interval)
-                jitter = self.config.scheduler.jitter
-                actual_minutes = base_interval + random.randint(-jitter, jitter) if jitter > 0 else base_interval
-                sleep_seconds = max(60, actual_minutes * 60)
-
-                self.ctx.logger.info(f"[调度器] 下次检查: +{sleep_seconds // 60}min")
-                await asyncio.sleep(sleep_seconds)
+                await self._init_target_streams()
+                if not self._states:
+                    self.ctx.logger.warning("没有可用目标流，15 秒后重新解析")
+                    await asyncio.sleep(15)
+                    continue
 
                 for target_id, state in list(self._states.items()):
                     if (target_id not in self.config.target.allowed_groups and
@@ -165,6 +185,11 @@ class LonelyMaiPlugin(MaiBotPlugin):
                         await self._check_and_trigger(state, target_id)
                     except Exception as e:
                         self.ctx.logger.error(f"[{target_id}] 检查异常: {e}", exc_info=True)
+
+                sleep_seconds = self._next_sleep_seconds()
+                if self.config.log.scheduler_log:
+                    self.ctx.logger.info(f"[调度器] 下次检查: +{sleep_seconds // 60}min")
+                await asyncio.sleep(sleep_seconds)
 
             except asyncio.CancelledError:
                 break
@@ -180,22 +205,27 @@ class LonelyMaiPlugin(MaiBotPlugin):
         end = parse_time(cfg.scheduler.end_time)
 
         if not is_in_time_range(current_time, start, end):
+            self._skip(target_id, f"不在 {cfg.scheduler.start_time}-{cfg.scheduler.end_time}")
             return
 
         min_interval = cfg.scheduler.min_interval_between_chats * 60
         if state.last_proactive_time and (now.timestamp() - state.last_proactive_time) < min_interval:
+            remain = int(min_interval - (now.timestamp() - state.last_proactive_time))
+            self._skip(target_id, f"距上次主动还有 {remain} 秒")
             return
 
         isolation_seconds = cfg.scheduler.isolation_time * 60
         if isolation_seconds > 0:
             last_msg_time = await self._get_last_msg_time(state.stream_id)
             if last_msg_time is not None and (now.timestamp() - last_msg_time) < isolation_seconds:
+                self._skip(target_id, "隔离期未到")
                 return
 
         if random.random() >= cfg.scheduler.probability:
+            self._skip(target_id, f"概率未命中 ({cfg.scheduler.probability})")
             return
 
-        self.ctx.logger.info(f"[{target_id}] 🎯 触发主动聊天")
+        self.ctx.logger.info(f"[{target_id}] 触发主动聊天")
         if await self._do_proactive_chat(state, target_id):
             state.last_proactive_time = now.timestamp()
 
@@ -248,11 +278,15 @@ class LonelyMaiPlugin(MaiBotPlugin):
                     "target_id": target_id,
                 },
             )
-            self.ctx.logger.info(f"[{target_id}] ✅ 已注入 Planner 上下文")
+            self.ctx.logger.info(f"[{target_id}] 已注入 Planner 上下文")
             return True
         except Exception as e:
-            self.ctx.logger.error(f"[{target_id}] 💥 主动触发失败: {e}", exc_info=True)
+            self.ctx.logger.error(f"[{target_id}] 主动触发失败: {e}", exc_info=True)
             return False
+
+    def _skip(self, target_id: str, reason: str) -> None:
+        if self.config.log.scheduler_log:
+            self.ctx.logger.info(f"[{target_id}] 跳过: {reason}")
 
     @staticmethod
     def _get_msg_user_id(msg: dict) -> str:
