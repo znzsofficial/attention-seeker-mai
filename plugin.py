@@ -54,40 +54,40 @@ class LonelyMaiPlugin(MaiBotPlugin):
         self._states: Dict[str, ChatStreamState] = {}
         self._scheduler_task: Optional[asyncio.Task] = None
         self._bot_qq: str = ""
+        self._lifecycle_lock = asyncio.Lock()
 
     # ========== 生命周期 ==========
 
     async def on_load(self) -> None:
-        if not self.config.plugin.enabled:
-            self.ctx.logger.info("LonelyMai 已禁用")
-            return
-
-        # 防止重复启动
-        if self._scheduler_task and not self._scheduler_task.done():
-            self._scheduler_task.cancel()
-            try:
-                await self._scheduler_task
-            except asyncio.CancelledError:
-                pass
-            self._scheduler_task = None
-
-        self._bot_qq = await self._get_global_str("bot.qq_account", "")
-
-        self._scheduler_task = asyncio.create_task(self._schedule_loop())
-        self.ctx.logger.info("LonelyMai 调度器已启动")
+        await self._sync_scheduler()
 
     async def on_unload(self) -> None:
-        if self._scheduler_task and not self._scheduler_task.done():
-            self._scheduler_task.cancel()
-            try:
-                await self._scheduler_task
-            except asyncio.CancelledError:
-                pass
+        async with self._lifecycle_lock:
+            await self._stop_scheduler()
         self.ctx.logger.info("LonelyMai 已卸载")
 
     async def on_config_update(self, *args, **kwargs):
         del args, kwargs
-        await self._init_target_streams()
+        await self._sync_scheduler()
+
+    async def _stop_scheduler(self) -> None:
+        task = self._scheduler_task
+        self._scheduler_task = None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _sync_scheduler(self) -> None:
+        async with self._lifecycle_lock:
+            await self._stop_scheduler()
+            if not self.config.plugin.enabled or not self.config.scheduler.enabled:
+                self.ctx.logger.info("LonelyMai 调度器已禁用")
+                return
+            self._bot_qq = await self._get_global_str("bot.qq_account", "")
+            # Keep cooldown state; only the scheduler resolves targets, avoiding
+            # concurrent replacement of states during an in-flight trigger.
+            self._scheduler_task = asyncio.create_task(self._schedule_loop())
+            self.ctx.logger.info("LonelyMai 调度器已启动")
 
     async def _get_global_str(self, key: str, default: str = "") -> str:
         try:
