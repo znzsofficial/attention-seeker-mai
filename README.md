@@ -1,6 +1,8 @@
 # 想要引起注意的麦麦 (attention-seeker-mai)
 
-让麦麦通过 Maisaka Planner 主动分享自己的日常、感受、兴趣或小计划，基于现有人格、记忆、上下文自行决定是否回复及如何表达。群聊和私聊都支持，仍由白名单及调度条件控制。
+通过Maisaka Planner主动发言：群聊默认普通冷场找话题，私聊可分享自己的日常、续聊旧事或问早。两种意图独立配置，仍使用现有人格、记忆、上下文，由白名单及原调度条件控制。
+
+2.0.3：新增`intent.group_text`/`intent.private_text`。群聊默认“群聊冷场了，主动找个话题聊聊”，不会把私聊提示词当回退；私聊新字段留空时沿用旧`intent.text`，保留已有定制。自动调度与/saymai都按解析出的会话类型选意图，不猜session_id前缀；群/私状态按(会话类型,目标ID)区分，同号不覆盖、不混冷却。时段、频率、概率、隔离期、reason仍共用旧设置，未增加第二套调度器。
 
 2.0.2：默认意图从“冷场找话题”改成“主动分享自己的生活”，不再把催回复、问在干嘛作为默认开场。优先感受、兴趣、小发现、计划或已建立的生活线索，不另建身份/虚构已完成的现实工具操作、不替用户编排生活。**这只是Planner意图，不是强制生成器或独立生活模拟器**：可能不发言，不保证每次完全遵循，也没有新增生活事件数据库/额外模型调用。已有线上config.toml不会被源码发布覆盖，必须在WebUI修改intent.text后才改变现有意图。自定义意图原样保留。
 
@@ -27,7 +29,7 @@
 [plugin]
 enabled = false
 config_version = "2.0.0"
-version = "2.0.2"
+version = "2.0.3"
 
 [scheduler]
 enabled = true
@@ -48,9 +50,13 @@ verbose = true
 scheduler_log = true
 
 [intent]
+group_text = "群聊冷场了，主动找个话题聊聊" # 群聊专用，空白也回退普通冷场
+private_text = ""                       # 私聊专用，留空兼容下面的旧text
 text = "主动分享一点自己的日常、感受、兴趣或小计划；沿用人格与记忆，不催回复、不惯性问在干嘛。不编造已完成的现实操作或对方的经历。"  # 简短自定义例子；完整默认见config.py/随仓库模板
 reason = "attention_proactive"         # 触发原因标识
 ```
+
+在WebUI的intent设置里分别填写group_text和private_text。旧text只用于private_text为空时的私聊兼容，不再是全局意图；若需要明确独立管理，可将原私聊text复制到private_text。源码发布仍不覆盖线上配置。
 
 ## 使用
 

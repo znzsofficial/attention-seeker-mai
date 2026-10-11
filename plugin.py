@@ -1,7 +1,7 @@
 """怕寂寞的麦麦 (LonelyMai) — 基于 Maisaka Planner 主动找话题。
 
 不再自行构建 prompt 和调用 LLM，而是通过 maisaka.proactive.trigger()
-将"主动分享自己的日常、感受或兴趣"的意图注入 Planner 上下文，由 Maisaka 基于
+将群聊冷场或私聊生活分享的独立意图注入 Planner 上下文，由 Maisaka 基于
 人格、记忆、上下文和工具自行决定是否回复及如何表达。
 """
 
@@ -11,11 +11,11 @@ import asyncio
 import random
 import time
 from datetime import datetime, time as datetime_time
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from maibot_sdk import Command, MaiBotPlugin
 
-from .config import LonelyMaiConfig
+from .config import GROUP_PROACTIVE_INTENT, LonelyMaiConfig
 
 
 # ==================== 工具函数 ====================
@@ -37,9 +37,10 @@ def is_in_time_range(current: datetime_time, start: datetime_time, end: datetime
 
 
 class ChatStreamState:
-    def __init__(self, stream_id: str, target_id: str):
+    def __init__(self, stream_id: str, target_id: str, *, is_group: bool = False):
         self.stream_id = stream_id
         self.target_id = target_id
+        self.is_group = is_group
         self.last_proactive_time: float = 0.0
 
 
@@ -51,7 +52,7 @@ class LonelyMaiPlugin(MaiBotPlugin):
 
     def __init__(self):
         super().__init__()
-        self._states: Dict[str, ChatStreamState] = {}
+        self._states: Dict[Tuple[bool, str], ChatStreamState] = {}
         self._scheduler_task: Optional[asyncio.Task] = None
         self._bot_qq: str = ""
         self._lifecycle_lock = asyncio.Lock()
@@ -100,8 +101,8 @@ class LonelyMaiPlugin(MaiBotPlugin):
         return str(val or default)
 
     async def _init_target_streams(self) -> None:
-        previous = {target_id: state.last_proactive_time for target_id, state in self._states.items()}
-        resolved: Dict[str, ChatStreamState] = {}
+        previous = {key: state.last_proactive_time for key, state in self._states.items()}
+        resolved: Dict[Tuple[bool, str], ChatStreamState] = {}
 
         for group_qq in self.config.target.allowed_groups:
             target_id = str(group_qq).strip()
@@ -109,9 +110,10 @@ class LonelyMaiPlugin(MaiBotPlugin):
                 continue
             sid = await self._resolve_session_id(target_id, True)
             if sid:
-                state = ChatStreamState(sid, target_id)
-                state.last_proactive_time = previous.get(target_id, 0.0)
-                resolved[target_id] = state
+                key = (True, target_id)
+                state = ChatStreamState(sid, target_id, is_group=True)
+                state.last_proactive_time = previous.get(key, 0.0)
+                resolved[key] = state
             else:
                 self.ctx.logger.warning(f"无法解析群聊: {target_id}")
 
@@ -121,9 +123,10 @@ class LonelyMaiPlugin(MaiBotPlugin):
                 continue
             sid = await self._resolve_session_id(target_id, False)
             if sid:
-                state = ChatStreamState(sid, target_id)
-                state.last_proactive_time = previous.get(target_id, 0.0)
-                resolved[target_id] = state
+                key = (False, target_id)
+                state = ChatStreamState(sid, target_id, is_group=False)
+                state.last_proactive_time = previous.get(key, 0.0)
+                resolved[key] = state
             else:
                 self.ctx.logger.warning(f"无法解析私聊: {target_id}")
 
@@ -176,9 +179,10 @@ class LonelyMaiPlugin(MaiBotPlugin):
                     await asyncio.sleep(15)
                     continue
 
-                for target_id, state in list(self._states.items()):
-                    if (target_id not in self.config.target.allowed_groups and
-                        target_id not in self.config.target.allowed_friends):
+                for state in list(self._states.values()):
+                    target_id = state.target_id
+                    allowed = self.config.target.allowed_groups if state.is_group else self.config.target.allowed_friends
+                    if target_id not in allowed:
                         continue
 
                     try:
@@ -263,19 +267,26 @@ class LonelyMaiPlugin(MaiBotPlugin):
 
     # ========== 主动聊天核心 ==========
 
+    def _intent_for(self, state: ChatStreamState) -> str:
+        cfg = self.config.intent
+        if state.is_group:
+            return cfg.group_text.strip() or GROUP_PROACTIVE_INTENT
+        return cfg.private_text.strip() or cfg.text
+
     async def _do_proactive_chat(self, state: ChatStreamState, target_id: str) -> bool:
         """通过 Maisaka 主动触发 API 非显式注入意图到 Planner 上下文。
 
-        意图文本从 config.intent.text 读取，用户可自定义。
+        群聊和私聊各选自己的意图，旧text仅作为私聊兼容回退。
         """
         try:
             await self.ctx.maisaka.proactive.trigger(
                 stream_id=state.stream_id,
-                intent=self.config.intent.text,
+                intent=self._intent_for(state),
                 reason=self.config.intent.reason,
                 metadata={
                     "source": "lonelymai",
                     "target_id": target_id,
+                    "chat_kind": "group" if state.is_group else "private",
                 },
             )
             self.ctx.logger.info(f"[{target_id}] 已注入 Planner 上下文")
@@ -301,15 +312,11 @@ class LonelyMaiPlugin(MaiBotPlugin):
         if not stream_id:
             return False, "无法获取当前会话 ID", True
 
-        target = None
-        for tid, st in self._states.items():
-            if st.stream_id == stream_id:
-                target = tid
-                break
-        if not target:
+        state = next((st for st in self._states.values() if st.stream_id == stream_id), None)
+        if state is None:
             return False, "当前会话未在白名单中", True
 
-        success = await self._do_proactive_chat(self._states[target], target)
+        success = await self._do_proactive_chat(state, state.target_id)
         if success:
             return True, "已触发主动发言", True
         else:

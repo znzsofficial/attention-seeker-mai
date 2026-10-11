@@ -7,6 +7,9 @@ from typing import List
 from maibot_sdk import Field, PluginConfigBase
 
 
+GROUP_PROACTIVE_INTENT = "群聊冷场了，主动找个话题聊聊"
+
+
 DAILY_LIFE_INTENT = (
     "你想主动分享一点自己的生活，而不是提醒对方回消息。"
     "结合当前人格、长期记忆、时间和最近对话，选一个与你自己有关的小话题："
@@ -23,7 +26,7 @@ DAILY_LIFE_INTENT = (
 class PluginSection(PluginConfigBase):
     enabled: bool = Field(default=True, description="是否启用插件")
     config_version: str = Field(default="2.0.0", description="配置文件版本号")
-    version: str = Field(default="2.0.2", description="插件版本")
+    version: str = Field(default="2.0.3", description="插件版本")
 
 
 class SchedulerSection(PluginConfigBase):
@@ -53,7 +56,15 @@ class IntentSection(PluginConfigBase):
     """主动触发时注入 Planner 的意图描述。"""
     text: str = Field(
         default=DAILY_LIFE_INTENT,
-        description="发送给 Planner 的主动发言意图，默认分享自己的日常、感受、兴趣和计划，可自定义"
+        description="旧配置兼容：私聊private_text留空时使用此意图，不用于群聊"
+    )
+    group_text: str = Field(
+        default=GROUP_PROACTIVE_INTENT,
+        description="群聊主动发言意图，默认普通冷场找话题；空白时也使用群聊默认，不沿用私聊意图"
+    )
+    private_text: str = Field(
+        default="",
+        description="私聊专用主动发言意图；留空时保留旧text，可设置生活分享、旧事追问和早安"
     )
     reason: str = Field(
         default="attention_proactive",

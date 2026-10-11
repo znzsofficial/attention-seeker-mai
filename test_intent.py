@@ -35,7 +35,7 @@ class LifeIntentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('不要催回复', kw['intent'])
         self.assertIn('未执行', kw['intent'])
         self.assertEqual(kw['reason'], 'attention_proactive')
-        self.assertEqual(kw['metadata'], {'source': 'lonelymai', 'target_id': 'target'})
+        self.assertEqual(kw['metadata'], {'source': 'lonelymai', 'target_id': 'target', 'chat_kind': 'private'})
 
     async def test_custom_intent_is_not_replaced_or_extended(self):
         self.bot.config.intent.text = '自定义意图'
@@ -50,7 +50,62 @@ class LifeIntentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(template['intent']['text'], self.bot.config.intent.text)
         self.assertFalse(template['plugin']['enabled'])
         self.assertEqual(template['plugin']['config_version'], '2.0.0')
-        self.assertEqual(template['plugin']['version'], '2.0.2')
+        self.assertEqual(template['plugin']['version'], '2.0.3')
+
+    async def test_group_uses_normal_cold_prompt_not_legacy_private_text(self):
+        self.bot.config.intent.text = '私聊定制，不应去群聊'
+        self.bot.config.intent.private_text = '明确私聊定制'
+        state = self.mod.ChatStreamState('group-chat', 'target', is_group=True)
+        await self.bot._do_proactive_chat(state, 'target')
+        kw = self.bot.ctx.maisaka.proactive.trigger.call_args.kwargs
+        self.assertEqual(kw['intent'], '群聊冷场了，主动找个话题聊聊')
+        self.assertEqual(kw['metadata']['chat_kind'], 'group')
+
+    async def test_group_and_private_custom_prompts_select_independently(self):
+        self.bot.config.intent.group_text = '群聊自定义'
+        self.bot.config.intent.private_text = '私聊自定义'
+        for group, expected in [(True, '群聊自定义'), (False, '私聊自定义')]:
+            state = self.mod.ChatStreamState('chat', 'target', is_group=group)
+            await self.bot._do_proactive_chat(state, 'target')
+            self.assertEqual(self.bot.ctx.maisaka.proactive.trigger.call_args.kwargs['intent'], expected)
+
+    def test_blank_group_does_not_fall_back_to_private_text(self):
+        self.bot.config.intent.group_text = '  '
+        self.bot.config.intent.text = '私聊旧设置'
+        self.bot.config.intent.private_text = '私聊新设置'
+        state = self.mod.ChatStreamState('chat', 'target', is_group=True)
+        self.assertEqual(self.bot._intent_for(state), '群聊冷场了，主动找个话题聊聊')
+        self.bot.config.intent.private_text = '  '
+        self.assertEqual(self.bot._intent_for(self.state), '私聊旧设置')
+
+    async def test_equal_numeric_group_and_friend_ids_have_separate_states(self):
+        self.bot.config.target.allowed_groups = ['42']
+        self.bot.config.target.allowed_friends = ['42']
+        self.bot.ctx.chat = types.SimpleNamespace(
+            get_stream_by_group_id=AsyncMock(return_value={'stream': {'session_id': 'group-chat'}}),
+            get_stream_by_user_id=AsyncMock(return_value={'stream': {'session_id': 'private-chat'}}))
+        await self.bot._init_target_streams()
+        self.assertEqual(len(self.bot._states), 2)
+        group = self.bot._states[(True, '42')]
+        private = self.bot._states[(False, '42')]
+        self.assertEqual((group.stream_id, group.is_group), ('group-chat', True))
+        self.assertEqual((private.stream_id, private.is_group), ('private-chat', False))
+        group.last_proactive_time = 123
+        private.last_proactive_time = 456
+        await self.bot._init_target_streams()
+        self.assertEqual(self.bot._states[(True, '42')].last_proactive_time, 123)
+        self.assertEqual(self.bot._states[(False, '42')].last_proactive_time, 456)
+
+    async def test_manual_command_uses_matched_stream_kind(self):
+        self.bot.config.intent.group_text = '群聊手动'
+        self.bot.config.intent.private_text = '私聊手动'
+        self.bot._states = {
+            (True, '42'): self.mod.ChatStreamState('group-chat', '42', is_group=True),
+            (False, '42'): self.mod.ChatStreamState('private-chat', '42')}
+        for sid, expected in [('group-chat', '群聊手动'), ('private-chat', '私聊手动')]:
+            result = await self.bot.cmd_trigger(stream_id=sid)
+            self.assertTrue(result[0])
+            self.assertEqual(self.bot.ctx.maisaka.proactive.trigger.call_args.kwargs['intent'], expected)
 
     async def test_trigger_exception_is_reported_as_failure(self):
         self.bot.ctx.maisaka.proactive.trigger.side_effect = RuntimeError('test')
