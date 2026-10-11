@@ -15,7 +15,7 @@ from typing import Dict, Optional, Tuple
 
 from maibot_sdk import Command, MaiBotPlugin
 
-from .config import GROUP_PROACTIVE_INTENT, LonelyMaiConfig
+from .config import GROUP_PROACTIVE_INTENT, PRIVATE_PROACTIVE_INTENT, LonelyMaiConfig
 
 
 # ==================== 工具函数 ====================
@@ -271,12 +271,12 @@ class LonelyMaiPlugin(MaiBotPlugin):
         cfg = self.config.intent
         if state.is_group:
             return cfg.group_text.strip() or GROUP_PROACTIVE_INTENT
-        return cfg.private_text.strip() or cfg.text
+        return cfg.private_text.strip() or PRIVATE_PROACTIVE_INTENT
 
     async def _do_proactive_chat(self, state: ChatStreamState, target_id: str) -> bool:
         """通过 Maisaka 主动触发 API 非显式注入意图到 Planner 上下文。
 
-        群聊和私聊各选自己的意图，旧text仅作为私聊兼容回退。
+        群聊和私聊各选自己的意图，空白时使用各自默认。
         """
         try:
             await self.ctx.maisaka.proactive.trigger(

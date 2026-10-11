@@ -10,23 +10,19 @@ from maibot_sdk import Field, PluginConfigBase
 GROUP_PROACTIVE_INTENT = "群聊冷场了，主动找个话题聊聊"
 
 
-DAILY_LIFE_INTENT = (
-    "你想主动分享一点自己的生活，而不是提醒对方回消息。"
-    "结合当前人格、长期记忆、时间和最近对话，选一个与你自己有关的小话题："
-    "此刻的感受、兴趣里的小发现、正在想的事情、想尝试的小计划，或已经建立的日常生活线索。"
-    "像忽然想跟熟悉的人说起的一两句话，自然亲近，不写汇报、流水账或话题清单。"
-    "不要复述这段意图，不说冷场了；不要催回复，也不要惯性追问在干嘛、吃了吗或怎么不理我。"
-    "尽量不重复最近已经主动说过的内容，不替对方编造经历或安排活动。"
-    "日常表达要符合已有的人格与生活设定，不额外创建职业、地点或重大经历；"
-    "没有依据时聊感受、兴趣和愿望，不把未发生的线下事件或未执行的查询、发帖、下单等外部操作说成已经完成。"
-    "若对方正忙、话题正在进行或时机不合适，可以暂时不发；有话想分享时直接分享，不必以问题收尾。"
+PRIVATE_PROACTIVE_INTENT = (
+    "想找对方聊两句，可以分享自己的日常、感受或小计划，"
+    "也可以顺着前面确实聊过、还没结束的事，问一句后来怎么样了。"
+    "早晨可以照常说早安、问醒了没，或按约定叫起床。"
+    "结合时间和最近对话选一个自然的话头，不机械查岗、不重复追问已回答的事，不必以问题收尾。"
+    "已经在聊就顺着接，没合适的话想说时可以暂时不发。"
 )
 
 
 class PluginSection(PluginConfigBase):
     enabled: bool = Field(default=True, description="是否启用插件")
     config_version: str = Field(default="2.0.0", description="配置文件版本号")
-    version: str = Field(default="2.0.3", description="插件版本")
+    version: str = Field(default="2.0.4", description="插件版本")
 
 
 class SchedulerSection(PluginConfigBase):
@@ -54,17 +50,13 @@ class LogSection(PluginConfigBase):
 
 class IntentSection(PluginConfigBase):
     """主动触发时注入 Planner 的意图描述。"""
-    text: str = Field(
-        default=DAILY_LIFE_INTENT,
-        description="旧配置兼容：私聊private_text留空时使用此意图，不用于群聊"
-    )
     group_text: str = Field(
         default=GROUP_PROACTIVE_INTENT,
         description="群聊主动发言意图，默认普通冷场找话题；空白时也使用群聊默认，不沿用私聊意图"
     )
     private_text: str = Field(
-        default="",
-        description="私聊专用主动发言意图；留空时保留旧text，可设置生活分享、旧事追问和早安"
+        default=PRIVATE_PROACTIVE_INTENT,
+        description="私聊主动发言意图：日常分享、旧事追问、早安/叫起床；空白时使用私聊默认"
     )
     reason: str = Field(
         default="attention_proactive",
