@@ -7,10 +7,23 @@ from typing import List
 from maibot_sdk import Field, PluginConfigBase
 
 
+DAILY_LIFE_INTENT = (
+    "你想主动分享一点自己的生活，而不是提醒对方回消息。"
+    "结合当前人格、长期记忆、时间和最近对话，选一个与你自己有关的小话题："
+    "此刻的感受、兴趣里的小发现、正在想的事情、想尝试的小计划，或已经建立的日常生活线索。"
+    "像忽然想跟熟悉的人说起的一两句话，自然亲近，不写汇报、流水账或话题清单。"
+    "不要复述这段意图，不说冷场了；不要催回复，也不要惯性追问在干嘛、吃了吗或怎么不理我。"
+    "尽量不重复最近已经主动说过的内容，不替对方编造经历或安排活动。"
+    "日常表达要符合已有的人格与生活设定，不额外创建职业、地点或重大经历；"
+    "没有依据时聊感受、兴趣和愿望，不把未发生的线下事件或未执行的查询、发帖、下单等外部操作说成已经完成。"
+    "若对方正忙、话题正在进行或时机不合适，可以暂时不发；有话想分享时直接分享，不必以问题收尾。"
+)
+
+
 class PluginSection(PluginConfigBase):
     enabled: bool = Field(default=True, description="是否启用插件")
     config_version: str = Field(default="2.0.0", description="配置文件版本号")
-    version: str = Field(default="2.0.0", description="插件版本")
+    version: str = Field(default="2.0.2", description="插件版本")
 
 
 class SchedulerSection(PluginConfigBase):
@@ -39,8 +52,8 @@ class LogSection(PluginConfigBase):
 class IntentSection(PluginConfigBase):
     """主动触发时注入 Planner 的意图描述。"""
     text: str = Field(
-        default="群聊冷场了，主动找个话题聊聊",
-        description="发送给 Maisaka Planner 的意图文本，指导 Maisaka 做什么"
+        default=DAILY_LIFE_INTENT,
+        description="发送给 Planner 的主动发言意图，默认分享自己的日常、感受、兴趣和计划，可自定义"
     )
     reason: str = Field(
         default="attention_proactive",

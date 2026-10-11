@@ -1,7 +1,7 @@
 """怕寂寞的麦麦 (LonelyMai) — 基于 Maisaka Planner 主动找话题。
 
 不再自行构建 prompt 和调用 LLM，而是通过 maisaka.proactive.trigger()
-将"冷场了，找话题聊聊"的意图注入 Planner 上下文，由 Maisaka 基于
+将"主动分享自己的日常、感受或兴趣"的意图注入 Planner 上下文，由 Maisaka 基于
 人格、记忆、上下文和工具自行决定是否回复及如何表达。
 """
 
