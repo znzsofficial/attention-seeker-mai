@@ -13,9 +13,11 @@ import time
 from datetime import datetime, time as datetime_time
 from typing import Dict, Optional, Tuple
 
-from maibot_sdk import Command, MaiBotPlugin
+from maibot_sdk import Command, HookHandler, MaiBotPlugin
+from maibot_sdk.types import ErrorPolicy, HookMode, HookOrder
 
 from .config import GROUP_PROACTIVE_INTENT, PRIVATE_PROACTIVE_INTENT, LonelyMaiConfig
+from .prompt_visibility import filter_request
 
 
 # ==================== 工具函数 ====================
@@ -266,6 +268,23 @@ class LonelyMaiPlugin(MaiBotPlugin):
             return None
 
     # ========== 主动聊天核心 ==========
+
+    @HookHandler('maisaka.planner.before_request', name='lonelymai_latest_planner_task',
+                 mode=HookMode.BLOCKING, order=HookOrder.LATE, error_policy=ErrorPolicy.SKIP)
+    async def filter_planner_tasks(self, **kwargs):
+        return self._filter_proactive_request(kwargs)
+
+    @HookHandler('maisaka.replyer.before_model_request', name='lonelymai_latest_replyer_task',
+                 mode=HookMode.BLOCKING, order=HookOrder.LATE, error_policy=ErrorPolicy.SKIP)
+    async def filter_replyer_tasks(self, **kwargs):
+        return self._filter_proactive_request(kwargs)
+
+    def _filter_proactive_request(self, kwargs):
+        modified, removed = filter_request(kwargs)
+        if not removed:
+            return None
+        self.ctx.logger.debug('本次请求过滤 %s 条旧主动任务，仅保留最新提示', removed)
+        return {'action': 'continue', 'modified_kwargs': modified}
 
     def _intent_for(self, state: ChatStreamState) -> str:
         cfg = self.config.intent
